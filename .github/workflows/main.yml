@@ -1,38 +1,78 @@
 name: Leo-AI-Final-Force
+
 on: [push, workflow_dispatch]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      BUILDOZER_PACKAGES_DIR: ${{ github.workspace }}/.buildozer/packages
+      BUILDOZER_ANDROID_DIR: ${{ github.workspace }}/.buildozer/android
+
     steps:
-      - name: Checkout code
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Python and Java
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          
-      - name: Install System Dependencies
+          python-version: "3.10"
+
+      - name: ☕ Install Java 17 (required for new Android builds)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 🧰 Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git python3-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-          pip install --user --upgrade buildozer Cython==0.29.33
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk python3-pip autoconf libtool \
+            pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libtinfo5 cmake libffi-dev libssl-dev
 
-      - name: Build APK (The Direct Way)
+      - name: 📦 Install Buildozer
         run: |
-          export PATH=$PATH:$HOME/.local/bin
-          # पुरानी गड़बड़ हटाओ और नया शुरू करो
-          rm -rf .buildozer/
-          # No prompt, automatic licenses
-          yes | buildozer android debug
+          pip install --upgrade pip wheel setuptools
+          pip install buildozer Cython==0.29.33
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Find and Upload APK (Search & Rescue)
+      - name: 🤖 Install Android SDK Command Line Tools
+        run: |
+          mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+          cd $ANDROID_SDK_ROOT/cmdline-tools
+          curl -o sdk.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip sdk.zip
+          mv cmdline-tools latest
+
+      - name: 📜 Accept Android Licenses & Install SDK Packages
+        run: |
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
+            "platform-tools" \
+            "platforms;android-33" \
+            "build-tools;33.0.2"
+
+      - name: 🧹 Clean old builds
+        run: |
+          rm -rf .buildozer
+          rm -rf bin
+
+      - name: ⚙️ Init buildozer.spec if missing
+        run: |
+          if [ ! -f "buildozer.spec" ]; then
+            buildozer init
+          fi
+
+      - name: 🛠 Build APK
+        run: |
+          buildozer android debug
+
+      - name: 📦 Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Leo-Final-APK
-          # यह कमांड पूरे GitHub सर्वर में जहाँ भी .apk बनेगा उसे ढूँढ लेगा
-          path: |
-            bin/*.apk
-            **/*.apk
-          if-no-files-found: error
+          name: Leo-AI-APK
+          path: bin/*.apk
