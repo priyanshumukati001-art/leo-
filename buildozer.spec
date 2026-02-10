@@ -17,3 +17,4 @@ presplash.filename = %(source.dir)s/data/presplash.png
 icon.filename = %(source.dir)s/data/icon.png
 orientation = portrait
 fullscreen = 0
+android.sdk_path = /home/runner/work/YOUR_REPO_NAME/YOUR_REPO_NAME/android-sdk
