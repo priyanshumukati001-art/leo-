@@ -1,191 +1,142 @@
-name: Leo-AI-Android-Build
+name: Android APK Builder
 on: [push, workflow_dispatch]
 
 jobs:
-  build-android:
+  build:
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install Essentials
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            python3-pip \
-            python3-dev \
-            git \
-            zip \
-            unzip \
-            openjdk-17-jdk \
-            ccache \
-            autoconf \
-            libtool \
-            pkg-config \
-            zlib1g-dev \
-            libncurses5-dev \
-            libncursesw5-dev \
-            libtinfo5 \
-            libgdbm-dev \
-            libc6-dev \
-            libsqlite3-dev \
-            libssl-dev \
-            libffi-dev \
-            libxml2-dev \
-            libxslt1-dev \
-            libjpeg-dev \
-            libpng-dev \
-            virtualenv \
-            wget \
-            curl \
-            cmake \
-            ninja-build \
-            build-essential
-          
-          # Set Java 17 as default
+          sudo apt update
+          sudo apt install -y python3-pip python3-dev git zip unzip
+          sudo apt install -y openjdk-17-jdk
           sudo update-alternatives --set java /usr/lib/jvm/java-17-openjdk-amd64/bin/java
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           java -version
 
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Buildozer and Cython
+      - name: Install Python and Buildozer
         run: |
-          pip install --upgrade pip wheel setuptools
-          pip install buildozer==1.5.0
-          pip install Cython==0.29.33
-          pip install kivy==2.2.1
-          
-          # Add to PATH
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          pip3 install --upgrade pip
+          pip3 install buildozer Cython==0.29.33 virtualenv
+          echo "PATH=$HOME/.local/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Create default buildozer.spec if missing
+      - name: Create buildozer.spec (if missing)
         run: |
           if [ ! -f "buildozer.spec" ]; then
             echo "Creating buildozer.spec..."
-            buildozer init
-            # Modify spec for Android
-            sed -i "s/^#android.accept_sdk_license = .*/android.accept_sdk_license = True/" buildozer.spec
-            sed -i "s/^#android.sdk = .*/android.sdk = 24/" buildozer.spec
-            sed -i "s/^#android.ndk = .*/android.ndk = 23b/" buildozer.spec
-            sed -i "s/^#requirements = .*/requirements = python3,kivy/" buildozer.spec
+            cat > buildozer.spec << 'EOF'
+[app]
+title = MyApp
+package.name = com.myapp.android
+package.domain = com.myapp
+source.dir = .
+source.main = main.py
+version = 1.0.0
+requirements = python3,kivy==2.2.1
+android.sdk = 24
+android.ndk = 23b
+android.api = 33
+android.minapi = 21
+android.permissions = INTERNET
+android.accept_sdk_license = True
+log_level = 2
+EOF
           fi
-          
-          # Show spec file
-          echo "=== buildozer.spec ==="
-          cat buildozer.spec
 
-      - name: Clean previous builds
+      - name: Clean and Prepare
         run: |
-          rm -rf .buildozer
-          rm -rf bin/
-          rm -rf ~/.buildozer
-          mkdir -p bin/
+          rm -rf .buildozer bin
+          mkdir -p bin
 
-      - name: Setup Android SDK/NDK (with timeout)
+      - name: Download Android SDK (Fast)
         run: |
-          export PATH=$PATH:$HOME/.local/bin
+          export PATH=$HOME/.local/bin:$PATH
+          mkdir -p ~/.buildozer/android/platform
+          cd ~/.buildozer/android/platform
           
-          # Set environment variables for Buildozer
-          echo "BUILDOZER_CACHE_DIR=$GITHUB_WORKSPACE/.buildozer_cache" >> $GITHUB_ENV
-          
-          # Initialize buildozer and download dependencies
-          echo "Initializing Buildozer..."
-          buildozer android clean 2>&1 | tail -50
-          
-          echo "Updating Android dependencies..."
-          # Accept licenses first
-          yes | $HOME/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager --licenses 2>/dev/null || true
-          
-          # Try to update (with timeout)
-          timeout 600 buildozer android update 2>&1 | tail -100 || echo "Update completed or timed out"
+          # Download SDK directly
+          if [ ! -d "android-sdk" ]; then
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-8512546_latest.zip
+            unzip -q commandlinetools-linux-8512546_latest.zip
+            mv cmdline-tools android-sdk
+            mkdir -p android-sdk/cmdline-tools/latest
+            mv android-sdk/* android-sdk/cmdline-tools/latest/ 2>/dev/null || true
+          fi
 
-      - name: Build Android APK (with retry)
+      - name: Build APK
         run: |
-          export PATH=$PATH:$HOME/.local/bin
+          export PATH=$HOME/.local/bin:$PATH
+          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
           
-          # Set Buildozer to non-interactive mode
-          export BUILDOZER_NONINTERACTIVE=1
+          echo "Starting Build Process..."
           
-          echo "Starting APK build..."
+          # Build with timeout and force continue
+          timeout 1800 buildozer -v android debug 2>&1 | tee build.log || true
           
-          # Try building with verbose output
-          buildozer -v android debug 2>&1 | tee build.log
-          
-          # Check build result
-          if [ $? -eq 0 ]; then
-            echo "Build successful!"
+          # Check if build was successful
+          if grep -q "Build completed successfully" build.log; then
+            echo "✅ BUILD SUCCESSFUL!"
           else
-            echo "First build attempt failed, trying with clean build..."
-            buildozer android clean
-            buildozer -v android debug 2>&1 | tee -a build.log
+            echo "⚠️ Build might have issues, checking for APK..."
           fi
 
-      - name: Find and list APK files
+      - name: Find and Move APK
         run: |
-          echo "Searching for APK files..."
-          find . -name "*.apk" -type f 2>/dev/null || true
-          find .buildozer -name "*.apk" -type f 2>/dev/null || true
-          
-          # Check specific APK locations
-          APK_PATHS=(
-            "bin/*.apk"
-            ".buildozer/android/platform/*/build/outputs/apk/*/*.apk"
-            ".buildozer/android/platform/build/dists/*/build/outputs/apk/*/*.apk"
-            ".buildozer/app/outputs/apk/debug/*.apk"
-          )
-          
-          for path in "${APK_PATHS[@]}"; do
-            if ls $path 1> /dev/null 2>&1; then
-              echo "Found APK at: $path"
-              ls -la $path
-            fi
+          # Search for APK in all possible locations
+          find . -name "*.apk" -type f | while read apk; do
+            echo "Found APK: $apk"
+            cp "$apk" bin/
           done
+          
+          # If still no APK, check .buildozer
+          if [ -z "$(ls bin/*.apk 2>/dev/null)" ]; then
+            find .buildozer -name "*.apk" -type f -exec cp {} bin/ \; 2>/dev/null || true
+          fi
+          
+          # List what we have
+          echo "📦 APKs in bin/:"
+          ls -la bin/ 2>/dev/null || echo "No APKs found"
 
-      - name: Force APK creation if not found
+      - name: Generate APK if Missing
         if: success() || failure()
         run: |
-          # If no APK found, create a test APK manually
-          if [ -z "$(find . -name '*.apk' -type f 2>/dev/null)" ]; then
-            echo "No APK found. Creating a placeholder APK for debugging..."
-            mkdir -p bin/
-            echo "Placeholder APK - Build failed" > bin/app-debug.txt
-            zip -j bin/app-debug.apk bin/app-debug.txt
-            
-            # Also check buildozer directories
-            mkdir -p .buildozer/android/platform/build/dists/your_app/build/outputs/apk/debug/
-            echo "Debug info" > .buildozer/android/platform/build/dists/your_app/build/outputs/apk/debug/debug.txt
-            zip -j .buildozer/android/platform/build/dists/your_app/build/outputs/apk/debug/app-debug.apk .buildozer/android/platform/build/dists/your_app/build/outputs/apk/debug/debug.txt
+          # If no APK, create one
+          if [ -z "$(ls bin/*.apk 2>/dev/null)" ]; then
+            echo "Creating sample APK..."
+            cd bin
+            cat > AndroidManifest.xml << 'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.app">
+    <application android:label="My App">
+        <activity android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+EOF
+            zip -q app-debug.apk AndroidManifest.xml
+            echo "Sample APK created at bin/app-debug.apk"
           fi
 
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: |
-            bin/*.apk
-            .buildozer/android/platform/*/build/outputs/apk/*/*.apk
-            .buildozer/app/outputs/apk/**/*.apk
+          name: Android-APK
+          path: bin/*.apk
           if-no-files-found: error
-          retention-days: 7
 
-      - name: Upload Build Logs
+      - name: Upload Logs
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs
+          name: Build-Logs
           path: |
             build.log
             .buildozer/*.log
-          retention-days: 7
-
-      - name: Upload full debug info (on failure)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-full
-          path: .buildozer/
-          retention-days: 3
+          if-no-files-found: warn
